@@ -64,35 +64,51 @@ if 'candidates' not in st.session_state:
 # --- AI SERVICES ---
 def get_ai_evaluation(jd_text, resume_text):
     """Call Gemini to evaluate the candidate against the JD."""
-    genai.configure(api_key=os.environ.get("API_KEY"))
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    # Ensure API key is available
+    api_key = os.environ.get("API_KEY")
+    if not api_key:
+        return {"error": "API Key not found in environment variables."}
+        
+    genai.configure(api_key=api_key)
+    # Using gemini-3-flash-preview for high performance screening
+    model = genai.GenerativeModel('gemini-3-flash-preview')
     
     prompt = f"""
-    Analyze this resume against the Job Description (JD).
-    JD: {jd_text}
-    Resume: {resume_text}
+    Analyze this candidate's resume against the following Job Description (JD).
     
-    Return a JSON object with:
-    - matchPercentage (number 0-100)
+    JD Content:
+    {jd_text}
+    
+    Resume Content:
+    {resume_text}
+    
+    Return a structured JSON evaluation with the following keys:
+    - matchPercentage (integer 0-100)
     - summary (string)
-    - pros (list of strings)
-    - cons (list of strings)
-    - interviewQuestions (list of 5 strings)
+    - pros (array of strings)
+    - cons (array of strings)
+    - interviewQuestions (array of 5 strings)
     """
     
     try:
         response = model.generate_content(prompt)
-        # Clean potential markdown from response
-        clean_json = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(clean_json)
+        # Handle cases where model might wrap JSON in markdown blocks
+        content = response.text.strip()
+        if content.startswith("```json"):
+            content = content[7:-3].strip()
+        elif content.startswith("```"):
+            content = content[3:-3].strip()
+            
+        return json.loads(content)
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"AI Processing Error: {str(e)}"}
 
 def generate_invite_email(name, role, score):
     """Generate a personalized email invite."""
-    genai.configure(api_key=os.environ.get("API_KEY"))
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
-    prompt = f"Write a warm, professional interview invitation email for {name} for the {role} role. Their AI match score was {score}%."
+    api_key = os.environ.get("API_KEY")
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-3-flash-preview')
+    prompt = f"Write a warm, professional interview invitation email for {name} for the {role} role. Their AI matching score was {score}%. Mention specific excitement about their fit."
     response = model.generate_content(prompt)
     return response.text
 
@@ -103,7 +119,7 @@ with st.sidebar:
     st.markdown("---")
     nav = st.radio("Navigation", ["📊 Dashboard", "💼 Job Management", "🔍 Candidate Screening"])
     st.markdown("---")
-    st.info("System running on Gemini 2.0 Flash Pro")
+    st.info("System running on Gemini 3 Flash")
 
 # --- DASHBOARD VIEW ---
 if nav == "📊 Dashboard":
@@ -162,57 +178,62 @@ elif nav == "💼 Job Management":
 elif nav == "🔍 Candidate Screening":
     st.title("Candidate Screening")
     
-    # 1. Selection
-    job_titles = [j['title'] for j in st.session_state.jobs]
-    selected_role = st.selectbox("Target Job Role", job_titles)
-    active_jd = next(j for j in st.session_state.jobs if j['title'] == selected_role)
-    
-    # 2. Upload
-    uploaded_file = st.file_uploader("Upload Candidate Resume (PDF or TXT)", type=['pdf', 'txt'])
-    
-    if uploaded_file and st.button("🚀 Run AI Analysis"):
-        with st.spinner("Gemini is analyzing the resume..."):
-            # Simulate text extraction (In prod use PyPDF2 for PDFs)
-            resume_text = uploaded_file.read().decode("utf-8", errors="ignore")
-            
-            # AI Evaluation
-            evaluation = get_ai_evaluation(active_jd['content'], resume_text)
-            
-            if "error" not in evaluation:
-                new_cand = {
-                    "name": uploaded_file.name.split('.')[0],
-                    "email": "candidate@example.com",
-                    "score": evaluation['matchPercentage'],
-                    "status": "Shortlisted" if evaluation['matchPercentage'] >= 75 else "Screened",
-                    "evaluation": evaluation
-                }
-                st.session_state.candidates.append(new_cand)
+    # Check if jobs exist
+    if not st.session_state.jobs:
+        st.warning("Please create a Job Description first in 'Job Management'.")
+    else:
+        # 1. Selection
+        job_titles = [j['title'] for j in st.session_state.jobs]
+        selected_role = st.selectbox("Target Job Role", job_titles)
+        active_jd = next(j for j in st.session_state.jobs if j['title'] == selected_role)
+        
+        # 2. Upload
+        uploaded_file = st.file_uploader("Upload Candidate Resume (PDF or TXT)", type=['pdf', 'txt'])
+        
+        if uploaded_file and st.button("🚀 Run AI Analysis"):
+            with st.spinner("Gemini is analyzing the resume..."):
+                # Simulate text extraction (In prod use PyPDF2 for PDFs)
+                resume_text = uploaded_file.read().decode("utf-8", errors="ignore")
                 
-                # Show results
-                st.balloons()
-                st.success(f"Analysis Complete! Match Score: {evaluation['matchPercentage']}%")
+                # AI Evaluation
+                evaluation = get_ai_evaluation(active_jd['content'], resume_text)
                 
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.info("🎯 **Strengths**")
-                    for p in evaluation['pros']: st.write(f"✅ {p}")
-                with col_b:
-                    st.warning("⚠️ **Gaps**")
-                    for c in evaluation['cons']: st.write(f"❌ {c}")
-                
-                st.markdown("### 📝 Suggested Interview Questions")
-                for q in evaluation['interviewQuestions']:
-                    st.write(f"- {q}")
-                
-                if st.button("📧 Generate Invitation Email"):
-                    email = generate_invite_email(new_cand['name'], selected_role, new_cand['score'])
-                    st.text_area("Email Draft", email, height=250)
-            else:
-                st.error(f"AI Evaluation failed: {evaluation['error']}")
+                if "error" not in evaluation:
+                    new_cand = {
+                        "name": uploaded_file.name.split('.')[0].replace('_', ' ').title(),
+                        "email": "candidate@example.com",
+                        "score": evaluation.get('matchPercentage', 0),
+                        "status": "Shortlisted" if evaluation.get('matchPercentage', 0) >= 75 else "Screened",
+                        "evaluation": evaluation
+                    }
+                    st.session_state.candidates.append(new_cand)
+                    
+                    # Show results
+                    st.balloons()
+                    st.success(f"Analysis Complete! Match Score: {new_cand['score']}%")
+                    
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.info("🎯 **Strengths**")
+                        for p in evaluation.get('pros', []): st.write(f"✅ {p}")
+                    with col_b:
+                        st.warning("⚠️ **Gaps**")
+                        for c in evaluation.get('cons', []): st.write(f"❌ {c}")
+                    
+                    st.markdown("### 📝 Suggested Interview Questions")
+                    for q in evaluation.get('interviewQuestions', []):
+                        st.write(f"- {q}")
+                    
+                    if st.button("📧 Generate Invitation Email"):
+                        email = generate_invite_email(new_cand['name'], selected_role, new_cand['score'])
+                        st.text_area("Email Draft", email, height=250)
+                else:
+                    st.error(f"AI Evaluation failed: {evaluation['error']}")
 
     st.markdown("---")
-    st.subheader("Screened Candidates")
+    st.subheader("Recent Screening History")
     if st.session_state.candidates:
-        st.dataframe(pd.DataFrame(st.session_state.candidates).drop(columns=['evaluation']))
+        history_df = pd.DataFrame(st.session_state.candidates)
+        st.dataframe(history_df[['name', 'email', 'score', 'status']].sort_values(by='score', ascending=False))
     else:
         st.write("No candidates screened for this role yet.")
