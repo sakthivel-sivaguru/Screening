@@ -1,0 +1,5 @@
+{
+  "name": "HireAI - Streamlit Recruitment Suite",
+  "description": "Streamlit-based AI hiring tool using Gemini for resume matching and screening.",
+  "requestFramePermissions": []
+}
